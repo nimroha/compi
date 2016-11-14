@@ -450,6 +450,8 @@
        (*disj 4)
        
        (*caten 2)
+       (*pack-with (lambda (hash val)
+                     (list->string (list hash val))))
        done))
 
 
