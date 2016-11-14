@@ -1,19 +1,20 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; start of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define <digit-0-9> 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Sexpr;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <Sexpr>
+  <fail>)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Number;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+((define <digit-0-9> 
   (range #\0 #\9))
 
 (define <digit-1-9> 
   (range #\1 #\9))
 
-(define <digit-0-9>*
-  (new (*parser <digit-0-9>) *star done))
-
-(define <nat>
+(define <Natural>
   (new  (*parser  (char #\0)) 
         (*pack (lambda (_) 0))
-		
+        
         (*parser <digit-1-9> )
         (*parser <digit-0-9>) *star
         (*caten 2) 
@@ -22,32 +23,220 @@
         (*disj 2)
         done))
 
-(define <int>
+(define <Integer>
   (new(*parser (char #\+))
-      (*parser <nat>)
+      (*parser <Natural>)
       (*caten 2)
       (*pack-with (lambda (x y) y)) 
-	  
+      
       (*parser (char #\-))
-      (*parser <nat>)
+      (*parser <Natural>)
       (*caten 2)
       (*pack-with (lambda (x y) (- y))) 
-	  
-      (*parser <nat>) 
-	  
+      
+      (*parser <Natural>) 
+      
       (*disj 3)
       done))
 
-(define <rat>
-  (new (*parser <int>)
+(define <Fraction>
+  (new (*parser <Integer>)
        (*parser (char #\/))
-       (*parser <nat>)
+       (*parser <Natural>)
        (*caten 3)
        (*pack-with
-	(lambda (num div den)
-	  (/ num den)))
+        (lambda (num div den)
+          (/ num den)))
        done))
+
+(define <Number>
+  (new (*parser <Fraction>)
+       (*parser <Integer>)
+       
+       (*disj 2)
+       done))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;BOOLEAN;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;	   
+
+(define <Boolean>
+  (new (*parser (char #\#))
+       
+       (*parser (char-ci #\t))
+       (*parser (char-ci #\f))
+       (*disj 2)
 	   
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;CHAR;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;	   
+
+(define <CharPrefix>
+  (new (*parser (char #\#))
+       (*parser (char #\\))
+       (*caten 2)
+       done))
+
+(define <VisibleSimpleChar>
+  (new (*parser <any-char>)
+       (*guard (lambda (n)
+                 (< (char->integer #\space) (char->integer n))))
+       (*pack (lambda (char)
+                (list char)))
+       done))
+
+(define ^<named-char>
+  (lambda (str)
+    (new (*parser (word-ci str))
+         (*pack (lambda (lst)
+                  (list->string lst)))
+         done)))
+
+(define <NamedChar>
+  (new (*parser (^<named-char> "lambda"))
+       (*parser (^<named-char> "newline"))
+       (*parser (^<named-char> "nul"))
+       (*parser (^<named-char> "page"))
+       (*parser (^<named-char> "return"))
+       (*parser (^<named-char> "space"))
+       (*parser (^<named-char> "tab"))
+       (*disj 7)
+       (*pack (lambda (str)
+                (string->list str)))
+       done))
+
+(define <HexChar>
+  (let ((zero (char->integer #\0))
+        (lc-a (char->integer #\a))
+        (uc-a (char->integer #\A)))
+    (new (*parser (range #\0 #\9))
+         (*pack
+          (lambda (ch)
+            (- (char->integer ch) zero)))
+         
+         (*parser (range #\a #\f))
+         (*pack
+          (lambda (ch)
+            (+ 10 (- (char->integer ch) lc-a))))
+         
+         (*parser (range #\A #\F))
+         (*pack
+          (lambda (ch)
+            (+ 10 (- (char->integer ch) uc-a))))
+         
+         (*disj 3)
+         done)))
+
+(define <HexUnicodeChar>
+  (new (*parser (word-ci "x"))
+       
+       (*parser <HexChar>)
+       *plus
+       (*caten 2)
+       (*pack-with (lambda (x chars)
+                     (list (integer->char
+                            (foldl (lambda (dig num)
+                                     (+ (* num 16) dig))
+                                   0
+                                   chars)))))
+       done))
+
+(define <Char>
+  (new (*parser <CharPrefix>)
+       
+       (*parser <HexUnicodeChar>)
+       (*parser <NamedChar>)
+       (*parser <VisibleSimpleChar>)      
+       (*disj 3)
+       
+       (*caten 2)
+       (*pack-with (lambda (pre char)
+                     (list->string `(,@pre ,@char)))) ; TODO do we want to pass the prefix?
+       done))
+ 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;STRING;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define <string-char>
+  (new (*parser <string-meta-char>)
+       (*parser <any-char>)
+	   
+       (*parser (char #\"))
+       (*parser (char #\\))
+	   
+       (*disj 2)
+       *diff
+	   
+       (*disj 2)
+       done))
+
+(define <string>
+  (new (*parser (char #\"))
+       (*parser <string-char>) *star
+       (*parser (char #\"))
+       (*caten 3)
+       (*pack-with (lambda(_x chars _y) (list->string chars)))
+       done))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;ProperList;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define <ProperList>
+  (new (*parser (char #\())
+       (*parser <Sexpr>) *star
+       (*parser (char #\)))
+       
+       (*caten 3)
+       done))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;ImproperList;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define <ImproperList>
+  (new (*parser (char #\())
+       (*parser <Sexpr>) *plus
+       (*parser (char #\.))
+       (*parser <Sexpr>)
+       (*parser (char #\)))
+       
+       (*caten 5)
+       done))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Vector;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <Vector>
+  (new (*parser (char #\#))
+       (*parser (char #\())
+       (*parser <Sexpr>) *star
+       (*parser (char #\)))
+       
+       (*caten 4)
+       done))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Quoted;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <Quoted>
+  (new (*parser (char #\'))
+       (*parser <Sexpr>)
+
+       (*caten 2)
+       done))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;QuasiQuoted;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <QuasiQuoted>
+  (new (*parser (char #\`))
+       (*parser <Sexpr>)
+
+       (*caten 2)
+       done))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Unquoted;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <Unquoted>
+  (new (*parser (char #\,))
+       (*parser <Sexpr>)
+
+       (*caten 2)
+       done))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;UnquoteAndSpliced;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <UnquoteAndSpliced>
+  (new (*parser (char #\,))
+       (*parser (char #\@))
+       (*parser <Sexpr>)
+
+       (*caten 3)
+       done))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; end of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;mayer's code:
 (define <hex-digit>
   (let ((zero (char->integer #\0))
 	(lc-a (char->integer #\a))
@@ -106,7 +295,8 @@
     (new (*parser (word str))
 	 (*pack (lambda (_) ch))
 	 done)))
-
+	 
+	 
 (define <string-meta-char>
   (new (*parser <hex-char>)
        (*parser (^<meta-char> "\\\\" #\\))
@@ -121,32 +311,12 @@
        (*parser (^<meta-char> "\\{smiley}" (integer->char 9786)))
 
        (*disj 11)
+       done))	 
+       
+       (*caten 2)
+       (*pack-with (lambda (hash val)
+                     (list->string (list hash val))))
        done))
-
-(define <string-char>
-  (new (*parser <string-meta-char>)
-       (*parser <any-char>)
-	   
-       (*parser (char #\"))
-       (*parser (char #\\))
-	   
-       (*disj 2)
-       *diff
-	   
-       (*disj 2)
-       done))
-
-(define <string>
-  (new (*parser (char #\"))
-       (*parser <string-char>) *star
-       (*parser (char #\"))
-       (*caten 3)
-       (*pack-with (lambda(_x chars _y) (list->string chars)))
-       done))
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; end of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 
 
 

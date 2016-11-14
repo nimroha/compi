@@ -440,18 +440,99 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; start of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define <boolean>
+(define <Boolean>
   (new (*parser (char #\#))
        
-       (*parser (char #\t))
-       (*parser (char #\T))
-       (*parser (char #\f))
-       (*parser (char #\F))
-       (*disj 4)
+       (*parser (char-ci #\t))
+       (*parser (char-ci #\f))
+       (*disj 2)
        
        (*caten 2)
        (*pack-with (lambda (hash val)
                      (list->string (list hash val))))
+       done))
+
+(define <CharPrefix>
+  (new (*parser (char #\#))
+       (*parser (char #\\))
+       (*caten 2)
+       done))
+
+(define <VisibleSimpleChar>
+  (new (*parser <any-char>)
+       (*guard (lambda (n)
+                 (< (char->integer #\space) (char->integer n))))
+       (*pack (lambda (char)
+                (list char)))
+       done))
+
+(define ^<named-char>
+  (lambda (str)
+    (new (*parser (word-ci str))
+         (*pack (lambda (lst)
+                  (list->string lst)))
+         done)))
+
+(define <NamedChar>
+  (new (*parser (^<named-char> "lambda"))
+       (*parser (^<named-char> "newline"))
+       (*parser (^<named-char> "nul"))
+       (*parser (^<named-char> "page"))
+       (*parser (^<named-char> "return"))
+       (*parser (^<named-char> "space"))
+       (*parser (^<named-char> "tab"))
+       (*disj 7)
+       (*pack (lambda (str)
+                (string->list str)))
+       done))
+
+(define <HexChar>
+  (let ((zero (char->integer #\0))
+        (lc-a (char->integer #\a))
+        (uc-a (char->integer #\A)))
+    (new (*parser (range #\0 #\9))
+         (*pack
+          (lambda (ch)
+            (- (char->integer ch) zero)))
+         
+         (*parser (range #\a #\f))
+         (*pack
+          (lambda (ch)
+            (+ 10 (- (char->integer ch) lc-a))))
+         
+         (*parser (range #\A #\F))
+         (*pack
+          (lambda (ch)
+            (+ 10 (- (char->integer ch) uc-a))))
+         
+         (*disj 3)
+         done)))
+
+(define <HexUnicodeChar>
+  (new (*parser (word-ci "x"))
+       
+       (*parser <HexChar>)
+       *plus
+       (*caten 2)
+       (*pack-with (lambda (x chars)
+                     (list (integer->char
+                            (foldl (lambda (dig num)
+                                     (+ (* num 16) dig))
+                                   0
+                                   chars)))))
+       done))
+
+(define <Char>
+  (new (*parser <CharPrefix>)
+       
+       (*parser <HexUnicodeChar>)
+       (*parser <NamedChar>)
+       (*parser <VisibleSimpleChar>)      
+       (*disj 3)
+       
+       (*caten 2)
+       (*pack-with (lambda (pre char)
+                     (list->string `(,@pre ,@char)))) ; TODO do we want to pass the prefix?
        done))
 
 
