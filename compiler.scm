@@ -65,6 +65,11 @@
        (*parser (char-ci #\f))
        (*disj 2)
 	   
+	   (*caten 2)
+       (*pack-with (lambda (hash val)
+                     (list->string (list hash val))))
+       done))
+	   
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;CHAR;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;	   
 
 (define <CharPrefix>
@@ -76,7 +81,7 @@
 (define <VisibleSimpleChar>
   (new (*parser <any-char>)
        (*guard (lambda (n)
-                 (< (char->integer #\space) (char->integer n))))
+                 (< (- (char->integer #\space) 1) (char->integer n))))
        (*pack (lambda (char)
                 (list char)))
        done))
@@ -101,7 +106,7 @@
                 (string->list str)))
        done))
 
-(define <HexChar>
+(define <hex-dig>
   (let ((zero (char->integer #\0))
         (lc-a (char->integer #\a))
         (uc-a (char->integer #\A)))
@@ -123,19 +128,30 @@
          (*disj 3)
          done)))
 
+(define <HexChar>
+    (new (*parser (range #\0 #\9))
+         (*parser (range #\a #\f))
+         (*parser (range #\A #\F))
+         (*disj 3)
+         done))
+
+
 (define <HexUnicodeChar>
-  (new (*parser (word-ci "x"))
-       
-       (*parser <HexChar>)
-       *plus
-       (*caten 2)
-       (*pack-with (lambda (x chars)
-                     (list (integer->char
-                            (foldl (lambda (dig num)
-                                     (+ (* num 16) dig))
-                                   0
-                                   chars)))))
-       done))
+    (new (*parser (word-ci "x"))
+         
+         (*parser <hex-dig>)
+         *plus
+         
+         (*parser <end-of-input>)
+         
+         (*caten 3)
+         (*pack-with (lambda (x chars end)
+                       (list (integer->char
+                              (foldl (lambda (byte total)
+                                       (+ (* total 16) byte))
+                                     0
+                                     chars)))))
+         done))
 
 (define <Char>
   (new (*parser <CharPrefix>)
@@ -148,6 +164,79 @@
        (*caten 2)
        (*pack-with (lambda (pre char)
                      (list->string `(,@pre ,@char)))) ; TODO do we want to pass the prefix?
+       done))
+
+
+(define <StringVisibleChar> <VisibleSimpleChar>)
+
+(define ^<meta-char>
+  (lambda (str ch)
+    (new (*parser (word str))
+         (*pack (lambda (_) ch))
+         done)))
+
+(define <StringMetaChar>
+  (new (*parser (^<meta-char> "\\\\" #\\))
+       (*parser (^<meta-char> "\\\"" #\"))
+       (*parser (^<meta-char> "\\n" #\newline))
+       (*parser (^<meta-char> "\\r" #\return))
+       (*parser (^<meta-char> "\\t" #\tab))
+       (*parser (^<meta-char> "\\f" #\page)) ; formfeed
+       
+       (*disj 6)
+       done))	 
+
+(define <StringHexChar>
+  (new (*parser (char #\\))
+       (*parser (char #\x))
+       
+       (*parser <HexChar>)
+       *plus
+       
+       (*parser <end-of-input>)
+       
+       (*caten 4)
+       (*pack-with (lambda (slash x chars end)
+                     (string-append "\\x" (list->string (flatten chars)))))
+       done))
+
+(define <StringChar>
+  (new (*parser <StringVisibleChar>)
+       (*parser <StringMetaChar>)
+       (*parser <StringHexChar>)
+       (*disj 3) ; TODO should we look for end-of-input?
+       done))
+
+(define <special-char>
+  (new (*parser (char #\!))
+       (*parser (char #\$))
+       (*parser (char #\/))
+       (*parser (char #\!))
+       (*parser (char #\^))
+       (*parser (char #\_))
+       (*parser (char #\*))
+       (*parser (char #\+))
+       (*parser (char #\-))
+       (*parser (range #\< #\?))
+       (*disj 10)
+       done))
+	   
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;SYMBOL;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define <SymbolChar>
+  (new (*parser (range #\0 #\9))
+       (*parser (range #\a #\z))
+       (*parser (range #\A #\Z))
+       (*parser <special-char>)
+       (*disj 4)
+       done))
+
+(define <Symbol>
+  (new (*parser <SymbolChar>)
+       *plus
+       (*pack (lambda (chars)
+                (list->string chars)))
        done))
  
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;STRING;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -173,6 +262,7 @@
        (*caten 3)
        (*pack-with (lambda(_x chars _y) (list->string chars)))
        done))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;ProperList;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define <ProperList>
@@ -207,7 +297,7 @@
 (define <Quoted>
   (new (*parser (char #\'))
        (*parser <Sexpr>)
-
+       
        (*caten 2)
        done))
 
@@ -215,23 +305,62 @@
 (define <QuasiQuoted>
   (new (*parser (char #\`))
        (*parser <Sexpr>)
-
+       
        (*caten 2)
        done))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Unquoted;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Unquoted;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define <Unquoted>
   (new (*parser (char #\,))
        (*parser <Sexpr>)
-
+       
        (*caten 2)
        done))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;UnquoteAndSpliced;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;UnquoteAndSpliced;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define <UnquoteAndSpliced>
   (new (*parser (char #\,))
        (*parser (char #\@))
        (*parser <Sexpr>)
-
+       
        (*caten 3)
+       done))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Symbol;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <symbol-a-z>
+  (range #\a #\z))
+(define <symbol-A-Z>
+  (range #\A #\Z))
+
+(define <symbol-meta-char>
+  (new (*parser (char #\!))
+       (*parser (char #\$))
+       (*parser (char #\^))
+       (*parser (char #\*))
+       (*parser (char #\-))
+       (*parser (char #\_))
+       (*parser (char #\=))
+       (*parser (char #\+))
+       (*parser (char #\<))
+       (*parser (char #\>))
+       (*parser (char #\?))
+       (*parser (char #\/))
+       
+       (*disj 12)
+       done))
+
+(define <SymbolChar>
+  (new (*parser <digit-0-9>)
+       (*pack (lambda (x)  (string->symbol (list->string (list x)))))
+       (*parser <symbol-a-z>)
+       (*pack (lambda (x) (string->symbol  (list->string (list x)))))
+       (*parser <symbol-A-Z>)
+       (*pack (lambda (x) (string->symbol  (list->string (list x)))))
+       (*parser <symbol-meta-char>)
+       (*pack (lambda (x) (string->symbol  (list->string (list x)))))
+       (*disj 4)
+       done))
+
+(define <Symbol>
+  (new (*parser <SymbolChar>)*plus
+       (*pack (lambda (x)   x))
        done))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; end of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -313,10 +442,7 @@
        (*disj 11)
        done))	 
        
-       (*caten 2)
-       (*pack-with (lambda (hash val)
-                     (list->string (list hash val))))
-       done))
+
 
 
 
