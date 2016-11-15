@@ -3,7 +3,22 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; start of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Sexpr;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define <Sexpr>
-  <fail>)
+<fail>)
+  ; (new (*parser <Boolean>)
+       ; (*parser <Char>)
+       ; (*parser <Number>)
+       ; (*parser <String>)
+       ; (*parser <Symbol>)
+       ; (*parser <ProperList>)
+       ; (*parser <ImproperList>)
+       ; (*parser <Vector>)
+       ; (*parser <Quoted>)
+       ; (*parser <QuasiQuoted>)
+       ; (*parser <Unquoted>)
+       ; (*parser <UnquoteAndSplice>)
+       ; (*parser <InfixExtension>)
+       ; (*disj 13)
+       ; done))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Number;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ((define <digit-0-9> 
   (range #\0 #\9))
@@ -323,45 +338,198 @@
        
        (*caten 3)
        done))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Symbol;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define <symbol-a-z>
-  (range #\a #\z))
-(define <symbol-A-Z>
-  (range #\A #\Z))
+	   
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  INFIX  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define <symbol-meta-char>
-  (new (*parser (char #\!))
-       (*parser (char #\$))
-       (*parser (char #\^))
-       (*parser (char #\*))
-       (*parser (char #\-))
-       (*parser (char #\_))
-       (*parser (char #\=))
-       (*parser (char #\+))
-       (*parser (char #\<))
-       (*parser (char #\>))
-       (*parser (char #\?))
-       (*parser (char #\/))
-       
+(define <PowerSymbol>
+  (new (*parser (char #\^))
+       (*parser (word "**"))
+       (*disj 2)
+       done))        
+
+(define <InfixPrefixExtensionPrefix>
+  (new (*parser (word "##"))
+       (*parser (word "#%"))
+       (*disj 2)
+       done))
+
+(define <InfixExpression>
+  (new (*delayed (lambda () <InfixAdd>))
+       (*delayed (lambda () <InfixNeg>))
+       (*delayed (lambda () <InfixSub>))
+       (*delayed (lambda () <InfixMul>))
+       (*delayed (lambda () <InfixDiv>))
+       (*delayed (lambda () <InfixPow>))
+       (*delayed (lambda () <InfixArrayGet>))
+       (*delayed (lambda () <InfixFuncall>))
+       (*delayed (lambda () <InfixParen>))
+       (*delayed (lambda () <InfixSexprEscape>))
+       (*delayed (lambda () <InfixSymbol>))
+       (*parser <Number>)
        (*disj 12)
        done))
+       
 
-(define <SymbolChar>
-  (new (*parser <digit-0-9>)
-       (*pack (lambda (x)  (string->symbol (list->string (list x)))))
-       (*parser <symbol-a-z>)
-       (*pack (lambda (x) (string->symbol  (list->string (list x)))))
-       (*parser <symbol-A-Z>)
-       (*pack (lambda (x) (string->symbol  (list->string (list x)))))
-       (*parser <symbol-meta-char>)
-       (*pack (lambda (x) (string->symbol  (list->string (list x)))))
-       (*disj 4)
+(define <InfixAdd>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\+))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(+ ,exp1 ,exp2)))
        done))
 
-(define <Symbol>
-  (new (*parser <SymbolChar>)*plus
-       (*pack (lambda (x)   x))
+(define <InfixNeg>
+  (new (*parser (char #\-))
+       (*parser <InfixExpression>)
+       (*parser <end-of-input>)
+       (*caten 3)
+       (*pack-with (lambda (op exp end)
+                     `(- ,exp)))
        done))
+
+(define <InfixSub>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\-))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(- ,exp1 ,exp2)))
+       done))
+
+(define <InfixMul>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\*))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(* ,exp1 ,exp2)))
+       done))
+
+(define <InfixDiv>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\/))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(/ ,exp1 ,exp2)))
+       done))
+
+(define <InfixPow>
+  (new (*parser <InfixExpression>)
+       (*parser <PowerSymbol>)
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(expt ,exp1 ,exp2)))
+       done))
+
+(define <InfixArrayGet>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\[))
+       (*parser <InfixExpression>)
+       (*parser (char #\]))
+       (*caten 4)
+       (*pack-with (lambda (arr p1 index p2)
+                     (cons arr index))) ; send as pair (list . index) let compiler deal with this
+       done))
+
+(define <InfixArgList>
+  (new (*parser <InfixExpression>)
+       *star
+       done))
+
+(define <InfixFuncall>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\())
+       (*parser <InfixArgList>)
+       (*parser (char #\)))
+       (*caten 4)
+       (*pack-with (lambda (f p1 args p2)
+                     `(,f ,@args)))
+       done))
+
+(define <InfixParen>
+  (new (*parser (char #\())
+       (*parser <InfixExpression>)
+       (*parser (char #\)))
+       (*caten 3)
+       (*pack-with (lambda (p1 exp p2)
+                     `(,@exp)))
+       done))
+
+(define <InfixSexprEscape>
+  (new (*parser <InfixPrefixExtensionPrefix>)
+       (*parser <Sexpr>)
+       (*caten 2)
+       (*pack-with (lambda (pre exp)
+                     exp)) ; TODO what should we return here?       
+       done))
+
+(define <operator-symbol>
+  (new (*parser (char #\*))
+       (*parser (char #\-))
+       (*parser (char #\+))
+       (*parser (char #\^))
+       (*parser (char #\/))
+       (*parser (word "**"))
+       (*disj 6)
+       done))
+
+(define <InfixSymbol>
+  (new (*parser <Symbol>)
+       (*parser <operator-symbol>)
+       *diff
+       ; TODO this also fails when the string starts
+       ; with an <operator-symbol> 
+       ; Example: "+23" fails, "23+" doesn't
+       done))
+
+(define <InfixExtension>
+  (new (*parser <InfixPrefixExtensionPrefix>)
+       (*parser <InfixExpression>)
+       (*caten 2)
+       done)) ;TODO how do we want to pass this?
+	   
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Symbol-old;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; (define <symbol-a-z>
+  ; (range #\a #\z))
+; (define <symbol-A-Z>
+  ; (range #\A #\Z))
+
+; (define <symbol-meta-char>
+  ; (new (*parser (char #\!))
+       ; (*parser (char #\$))
+       ; (*parser (char #\^))
+       ; (*parser (char #\*))
+       ; (*parser (char #\-))
+       ; (*parser (char #\_))
+       ; (*parser (char #\=))
+       ; (*parser (char #\+))
+       ; (*parser (char #\<))
+       ; (*parser (char #\>))
+       ; (*parser (char #\?))
+       ; (*parser (char #\/))
+       
+       ; (*disj 12)
+       ; done))
+
+; (define <SymbolChar>
+  ; (new (*parser <digit-0-9>)
+       ; (*pack (lambda (x)  (string->symbol (list->string (list x)))))
+       ; (*parser <symbol-a-z>)
+       ; (*pack (lambda (x) (string->symbol  (list->string (list x)))))
+       ; (*parser <symbol-A-Z>)
+       ; (*pack (lambda (x) (string->symbol  (list->string (list x)))))
+       ; (*parser <symbol-meta-char>)
+       ; (*pack (lambda (x) (string->symbol  (list->string (list x)))))
+       ; (*disj 4)
+       ; done))
+
+; (define <Symbol>
+  ; (new (*parser <SymbolChar>)*plus
+       ; (*pack (lambda (x)   x))
+       ; done))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; end of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

@@ -439,7 +439,58 @@
 ;;; end-of-input
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; start of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Number;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define <digit-0-9> 
+  (range #\0 #\9))
 
+(define <digit-1-9> 
+  (range #\1 #\9))
+
+(define <Natural>
+  (new  (*parser  (char #\0)) 
+        (*pack (lambda (_) 0))
+        
+        (*parser <digit-1-9> )
+        (*parser <digit-0-9>) *star
+        (*caten 2) 
+        (*pack-with (lambda (x y) (string->number
+                                   (list->string `(,x ,@y)))))
+        (*disj 2)
+        done))
+
+(define <Integer>
+  (new(*parser (char #\+))
+      (*parser <Natural>)
+      (*caten 2)
+      (*pack-with (lambda (x y) y)) 
+      
+      (*parser (char #\-))
+      (*parser <Natural>)
+      (*caten 2)
+      (*pack-with (lambda (x y) (- y))) 
+      
+      (*parser <Natural>) 
+      
+      (*disj 3)
+      done))
+
+(define <Fraction>
+  (new (*parser <Integer>)
+       (*parser (char #\/))
+       (*parser <Natural>)
+       (*caten 3)
+       (*pack-with
+        (lambda (num div den)
+          (/ num den)))
+       done))
+
+(define <Number>
+  (new (*parser <Fraction>)
+       (*parser <Integer>)
+       
+       (*disj 2)
+       done))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define <Boolean>
   (new (*parser (char #\#))
        
@@ -461,7 +512,7 @@
 (define <VisibleSimpleChar>
   (new (*parser <any-char>)
        (*guard (lambda (n)
-                 (< (- (char->integer #\space) 1) (char->integer n))))
+                 (< (char->integer #\space) (char->integer n))))
        (*pack (lambda (char)
                 (list char)))
        done))
@@ -509,29 +560,29 @@
          done)))
 
 (define <HexChar>
-    (new (*parser (range #\0 #\9))
-         (*parser (range #\a #\f))
-         (*parser (range #\A #\F))
-         (*disj 3)
-         done))
+  (new (*parser (range #\0 #\9))
+       (*parser (range #\a #\f))
+       (*parser (range #\A #\F))
+       (*disj 3)
+       done))
 
 
 (define <HexUnicodeChar>
-    (new (*parser (word-ci "x"))
-         
-         (*parser <hex-dig>)
-         *plus
-         
-         (*parser <end-of-input>)
-         
-         (*caten 3)
-         (*pack-with (lambda (x chars end)
-                       (list (integer->char
-                              (foldl (lambda (byte total)
-                                       (+ (* total 16) byte))
-                                     0
-                                     chars)))))
-         done))
+  (new (*parser (word-ci "x"))
+       
+       (*parser <hex-dig>)
+       *plus
+       
+       (*parser <end-of-input>)
+       
+       (*caten 3)
+       (*pack-with (lambda (x chars end)
+                     (list (integer->char
+                            (foldl (lambda (byte total)
+                                     (+ (* total 16) byte))
+                                   0
+                                   chars)))))
+       done))
 
 (define <Char>
   (new (*parser <CharPrefix>)
@@ -547,7 +598,13 @@
        done))
 
 
-(define <StringVisibleChar> <VisibleSimpleChar>)
+(define <StringVisibleChar>
+  (new (*parser <any-char>)
+       (*guard (lambda (n)
+                 (< (- (char->integer #\space) 1) (char->integer n))))
+       (*pack (lambda (char)
+                (list char)))
+       done))
 
 (define ^<meta-char>
   (lambda (str ch)
@@ -587,6 +644,17 @@
        (*disj 3) ; TODO should we look for end-of-input?
        done))
 
+
+(define <String> ; TODO not working
+  (new (*parser (char #\"))
+       (*parser <StringChar>)
+       *star
+       (*parser (char #\"))
+       (*caten 3)
+       done))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  symbol  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (define <special-char>
   (new (*parser (char #\!))
        (*parser (char #\$))
@@ -600,7 +668,6 @@
        (*parser (range #\< #\?))
        (*disj 10)
        done))
-
 
 (define <SymbolChar>
   (new (*parser (range #\0 #\9))
@@ -617,4 +684,175 @@
                 (list->string chars)))
        done))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  sexpr  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define <Sexpr>
+  <fail>)
+;  (new (*parser <Boolean>)
+;       (*parser <Char>)
+;       (*parser <Number>)
+;       (*parser <String>)
+;       (*parser <Symbol>)
+;       (*parser <ProperList>)
+;       (*parser <ImproperList>)
+;       (*parser <Vector>)
+;       (*parser <Quoted>)
+;       (*parser <QuasiQuoted>)
+;       (*parser <Unquoted>)
+;       (*parser <UnquoteAndSplice>)
+;       (*parser <InfixExtension>)
+;       (*disj 13)
+;       done))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  INFIX  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define <PowerSymbol>
+  (new (*parser (char #\^))
+       (*parser (word "**"))
+       (*disj 2)
+       done))        
+
+(define <InfixPrefixExtensionPrefix>
+  (new (*parser (word "##"))
+       (*parser (word "#%"))
+       (*disj 2)
+       done))
+
+(define <InfixExpression>
+  (new (*delayed (lambda () <InfixAdd>))
+       (*delayed (lambda () <InfixNeg>))
+       (*delayed (lambda () <InfixSub>))
+       (*delayed (lambda () <InfixMul>))
+       (*delayed (lambda () <InfixDiv>))
+       (*delayed (lambda () <InfixPow>))
+       (*delayed (lambda () <InfixArrayGet>))
+       (*delayed (lambda () <InfixFuncall>))
+       (*delayed (lambda () <InfixParen>))
+       (*delayed (lambda () <InfixSexprEscape>))
+       (*delayed (lambda () <InfixSymbol>))
+       (*parser <Number>)
+       (*disj 12)
+       done))
+       
+
+(define <InfixAdd>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\+))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(+ ,exp1 ,exp2)))
+       done))
+
+(define <InfixNeg>
+  (new (*parser (char #\-))
+       (*parser <InfixExpression>)
+       (*parser <end-of-input>)
+       (*caten 3)
+       (*pack-with (lambda (op exp end)
+                     `(- ,exp)))
+       done))
+
+(define <InfixSub>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\-))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(- ,exp1 ,exp2)))
+       done))
+
+(define <InfixMul>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\*))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(* ,exp1 ,exp2)))
+       done))
+
+(define <InfixDiv>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\/))
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(/ ,exp1 ,exp2)))
+       done))
+
+(define <InfixPow>
+  (new (*parser <InfixExpression>)
+       (*parser <PowerSymbol>)
+       (*parser <InfixExpression>)
+       (*caten 3)
+       (*pack-with (lambda (exp1 op exp2)
+                     `(expt ,exp1 ,exp2)))
+       done))
+
+(define <InfixArrayGet>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\[))
+       (*parser <InfixExpression>)
+       (*parser (char #\]))
+       (*caten 4)
+       (*pack-with (lambda (arr p1 index p2)
+                     (cons arr index))) ; send as pair (list . index) let compiler deal with this
+       done))
+
+(define <InfixArgList>
+  (new (*parser <InfixExpression>)
+       *star
+       done))
+
+(define <InfixFuncall>
+  (new (*parser <InfixExpression>)
+       (*parser (char #\())
+       (*parser <InfixArgList>)
+       (*parser (char #\)))
+       (*caten 4)
+       (*pack-with (lambda (f p1 args p2)
+                     `(,f ,@args)))
+       done))
+
+(define <InfixParen>
+  (new (*parser (char #\())
+       (*parser <InfixExpression>)
+       (*parser (char #\)))
+       (*caten 3)
+       (*pack-with (lambda (p1 exp p2)
+                     `(,@exp)))
+       done))
+
+(define <InfixSexprEscape>
+  (new (*parser <InfixPrefixExtensionPrefix>)
+       (*parser <Sexpr>)
+       (*caten 2)
+       (*pack-with (lambda (pre exp)
+                     exp)) ; TODO what should we return here?       
+       done))
+
+(define <operator-symbol>
+  (new (*parser (char #\*))
+       (*parser (char #\-))
+       (*parser (char #\+))
+       (*parser (char #\^))
+       (*parser (char #\/))
+       (*parser (word "**"))
+       (*disj 6)
+       done))
+
+(define <InfixSymbol>
+  (new (*parser <Symbol>)
+       (*parser <operator-symbol>)
+       *diff
+       ; TODO this also fails when the string starts
+       ; with an <operator-symbol> 
+       ; Example: "+23" fails, "23+" doesn't
+       done))
+
+(define <InfixExtension>
+  (new (*parser <InfixPrefixExtensionPrefix>)
+       (*parser <InfixExpression>)
+       (*caten 2)
+       done)) ;TODO how do we want to pass this?
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  end of compiler.scm  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
