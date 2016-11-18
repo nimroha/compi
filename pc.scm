@@ -441,7 +441,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; start of compiler.scm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Number;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define <digit-0-9> 
   (range #\0 #\9))
@@ -771,6 +770,26 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  INFIX  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+
+(define <operator-symbol>
+  (new (*parser (char #\*))
+       (*parser (char #\-))
+       (*parser (char #\+))
+       (*parser (char #\^))
+       (*parser (char #\/))
+       (*parser (word "**"))
+       (*disj 6)
+       done))
+
+(define <InfixSymbol>
+  (new (*parser <Symbol>)
+       (*parser <operator-symbol>)
+       *diff
+       ; TODO this also fails when the string starts
+       ; with an <operator-symbol> 
+       ; Example: "+23" fails, "23+" doesn't
+       done))
+
 (define <PowerSymbol>
   (new (*parser (char #\^))
        (*parser (word "**"))
@@ -786,15 +805,12 @@
 
 (define <InfixAdd>
   (new (*parser <Number>)
+       (*parser <InfixSymbol>)
        (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
+       (*disj 3)
        
        (*parser (char #\+))
-       
-       (*parser <Number>)
-       (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
-       
+       (*delayed (lambda () <InfixExpression>))       
        (*caten 3)
        (*pack-with (lambda (exp1 op exp2)
                      `(+ ,exp1 ,exp2)))
@@ -803,22 +819,19 @@
 (define <InfixNeg>
   (new (*parser (char #\-))
        (*delayed (lambda () <InfixExpression>))
-       (*parser <end-of-input>) ; TODO should probably delete this
-       (*caten 3)
+       (*caten 2)
        (*pack-with (lambda (op exp end)
                      `(- ,exp)))
        done))
 
 (define <InfixSub>
   (new (*parser <Number>)
+       (*parser <InfixSymbol>)
        (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
+       (*disj 3)
        
        (*parser (char #\-))
-       (*parser <Number>)
        (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
-       
        (*caten 3)
        (*pack-with (lambda (exp1 op exp2)
                      `(- ,exp1 ,exp2)))
@@ -826,44 +839,51 @@
 
 (define <InfixMul>
   (new (*parser <Number>)
+       (*parser <InfixSymbol>)
        (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
+       (*disj 3)
        
        (*parser (char #\*))
-       (*parser <Number>)
-       (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
-       
+       (*delayed (lambda () <InfixExpression>)) 
        (*caten 3)
        (*pack-with (lambda (exp1 op exp2)
                      `(* ,exp1 ,exp2)))
        done))
 
 (define <InfixDiv>
-  (new (*parser <Number>)
+  (new (*parser <Integer>)
+       (*parser (char #\/))
+       (*parser <Integer>)
+       (*caten 3)
+       (*pack-with (lambda (n1 div n2)
+                     `(/ ,n1 ,n2)))
+       
+       (*parser <Number>)
+       (*parser <InfixSymbol>)
        (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
+       (*disj 3)
        
        (*parser (char #\/))
-       (*parser <Number>)
        (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
-       
        (*caten 3)
        (*pack-with (lambda (exp1 op exp2)
                      `(/ ,exp1 ,exp2)))
+       
+       (*disj 2)
        done))
 
 (define <InfixPow>
   (new (*parser <Number>)
+       (*parser <InfixSymbol>)
        (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
+       (*disj 3)
        
        (*parser <PowerSymbol>)
-       (*parser <Number>)
-       (*delayed (lambda () <InfixExpression>))
-       (*disj 2)
        
+       (*parser <Number>)
+       (*parser <InfixSymbol>)
+       (*delayed (lambda () <InfixParen>))
+       (*disj 3)
        (*caten 3)
        (*pack-with (lambda (exp1 op exp2)
                      `(expt ,exp1 ,exp2)))
@@ -929,25 +949,6 @@
                      exp)) ; TODO what should we return here?       
        done))
 
-(define <operator-symbol>
-  (new (*parser (char #\*))
-       (*parser (char #\-))
-       (*parser (char #\+))
-       (*parser (char #\^))
-       (*parser (char #\/))
-       (*parser (word "**"))
-       (*disj 6)
-       done))
-
-(define <InfixSymbol>
-  (new (*parser <Symbol>)
-       (*parser <operator-symbol>)
-       *diff
-       ; TODO this also fails when the string starts
-       ; with an <operator-symbol> 
-       ; Example: "+23" fails, "23+" doesn't
-       done))
-
 
 (define <InfixExpression>
   (new (*parser <InfixParen>)
@@ -971,6 +972,53 @@
        (*caten 2)
        done)) ;TODO how do we want to pass this?
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  COMMENT  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define <Whitespace>
+  (new (*parser <any-char>)
+       (*parser <VisibleSimpleChar>)
+       *diff
+       (*pack (lambda (a) null))
+       done))
+
+
+(define end-line-chars
+  (list #\newline #\page #\return))
+
+(define <line-comment>
+  (new (*parser (char #\;))
+       
+       (*parser <any-char>)
+       (*guard (lambda (x)
+                 (andmap (lambda (char)
+                           (not (eq? x char)))
+                         end-line-chars)))
+       *star
+       (*caten 2)
+       (*pack-with (lambda (a b) null))
+       done))
+
+(define <expr-comment>
+  (new (*parser (word "#;"))
+       (*delayed (lambda () <Sexpr>))
+       (*caten 2)
+       (*pack-with (lambda (a b) null))
+       done))
+
+(define <Comment> ; TODO where do we push this?
+  (new (*parser <line-comment>)
+       (*parser <expr-comment>)
+       (*disj 2)
+       done))
+
+(define <Skip>
+  (new (*parser <Comment>)
+       (*parser <Whitespace>)
+       (*disj 2)
+       (*pack (lambda (a) null))
+       done))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  SEXPR  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define <Sexpr>
@@ -987,7 +1035,8 @@
        (*parser <Unquoted>)
        (*parser <UnquoteAndSpliced>)
        ;       (*parser <InfixExtension>)
-       (*disj 12);13)
+       (*parser <Skip>) *star
+       (*disj 13);14)
        done))
 
 
