@@ -769,6 +769,7 @@
        (*pack-with (lambda (_x _y exp )
                      (list 'unquote-splicing exp)))
        done))
+       
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Mayer  COMMENT  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define <whitespace>
@@ -987,7 +988,6 @@
        (*parser <InfixExpression>)
        (*caten 2)
        (*pack-with (lambda (pre exp) exp)) ;TODO is this how we want to pass this?
-       
        done)) 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;OLD  COMMENT  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
