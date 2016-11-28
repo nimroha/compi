@@ -117,13 +117,23 @@
    pattern-rule-vector
    ))
 
+
+;;;;;;;;;;;;;;;;;;;;;;;;; variable ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define pattern-rule-var 
+   (pattern-rule '(? 'v (not (member *reserved-words*))) (lambda (v) `(var ,v))))
+
 ;;;;;;;;;;;;;;;;;; tag-parser ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define tag-parser
   (let ((run 
          (compose-patterns 
           compose-patterns-const
+          pattern-rule-var
           )))
     (lambda (sexp)(run sexp (lambda () '(fail!))))))
+
+
+
 
 
