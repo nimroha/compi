@@ -18,41 +18,41 @@
 
 (define match
   (letrec ((match
-               (lambda (pat e ret-vals ret-fail)
-                 (cond ((and (pair? pat) (pair? e))
-                        (match (car pat) (car e)
-                          (lambda (vals-car)
-                            (match (cdr pat) (cdr e)
-                              (lambda (vals-cdr)
-                                (ret-vals
-                                 (append vals-car vals-cdr)))
-                              ret-fail))
-                          ret-fail))
-                       ((and (vector? pat) (vector? e)
-                             (= (vector-length pat) (vector-length e))
-                             (match (vector->list pat) (vector->list e)
-                               ret-vals ret-fail)))
-                       ((procedure? pat)
-                        (let ((v (pat e)))
-                          (if v (ret-vals v) (ret-fail))))
-                       ((equal? pat e) (ret-vals '()))
-                       (else (ret-fail))))))
+	    (lambda (pat e ret-vals ret-fail)
+	      (cond ((and (pair? pat) (pair? e))
+		     (match (car pat) (car e)
+			    (lambda (vals-car)
+			      (match (cdr pat) (cdr e)
+				     (lambda (vals-cdr)
+				       (ret-vals
+					(append vals-car vals-cdr)))
+				     ret-fail))
+			    ret-fail))
+		    ((and (vector? pat) (vector? e)
+			  (= (vector-length pat) (vector-length e))
+			  (match (vector->list pat) (vector->list e)
+				 ret-vals ret-fail)))
+		    ((procedure? pat)
+		     (let ((v (pat e)))
+		       (if v (ret-vals v) (ret-fail))))
+		    ((equal? pat e) (ret-vals '()))
+		    (else (ret-fail))))))
     (lambda (pat e ret-with ret-fail)
       (match pat e
-        (lambda (vals) (apply ret-with vals))
-        ret-fail))))
+	     (lambda (vals) (apply ret-with vals))
+	     ret-fail))))
 
 (define ?
   (lambda (name . guards)
     (let ((guard?
-           (lambda (e)
-             (andmap 
-              (lambda (g?) (g? e))
-              guards))))
+	   (lambda (e)
+	     (andmap 
+	      (lambda (g?) (g? e))
+	      guards))))
       (lambda (value)
-        (if (guard? value)
-            (list value)
-            #f)))))
+	(if (guard? value)
+	    (list value)
+	    #f)))))
 
 ;;; composing patterns
 
@@ -60,22 +60,21 @@
   (lambda (pat handler)
     (lambda (e failure)
       (match pat e handler failure))))
-
 (define compose-patterns
   (letrec ((match-nothing
-            (lambda (e failure)
-              (failure)))
-           (loop
-            (lambda (s)
-              (if (null? s)
-                  match-nothing
-                  (let ((match-rest
-                         (loop (cdr s)))
-                        (match-first (car s)))
-                    (lambda (e failure)
-                      (match-first e
-                                   (lambda ()
-                                     (match-rest e failure)))))))))
+	    (lambda (e failure)
+	      (failure)))
+	   (loop
+	    (lambda (s)
+	      (if (null? s)
+		  match-nothing
+		  (let ((match-rest
+			 (loop (cdr s)))
+			(match-first (car s)))
+		    (lambda (e failure)
+		      (match-first e
+		       (lambda ()
+			 (match-rest e failure)))))))))
     (lambda patterns
       (loop patterns))))
 
@@ -1830,43 +1829,109 @@
           [else (map (lambda (sub-exp) (eliminate-nested-defines sub-exp)) parsed-exp)]
           )))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; boxing of variables ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; remove-applic-lambda-nil ;;;;;;;;;;;;;;;;;;;;;;;
+(define empty-lambda?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(applic (lambda-simple ()  . ,(? 'exp)) ()) (lambda (exp) #t)) e fail!))))
+
+(define empty-lambda-pattern
+  (pattern-rule `(applic (lambda-simple ()  . ,(? 'exp)) ()) (lambda (exp) (car exp))))
 
 
+(define remove-applic-lambda-nil
+  (lambda (exps)
+
+    (letrec ((empty-lambda->exp (lambda (e) (empty-lambda-pattern e fail!)))
+             (remove-lambda-empty (lambda (e)
+                                    (cond((empty-lambda? e) (remove-lambda-empty (empty-lambda->exp e)))
+                                         ((null? e) '())
+                                         ((list? e) (cons (remove-lambda-empty (car e)) (remove-lambda-empty (cdr e))))
+                                         (else e)
+                                         ))))
+      
+      (remove-lambda-empty exps)
+      )))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; pe->lex-pe ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define lambda-simple-pattern?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(lambda-simple ,(? 'args list?)  . ,(? 'exp)) (lambda (args exp) #t)) e fail!))
+    ))
+
+(define lambda-simple->args
+  (lambda (e)
+    ((pattern-rule `(lambda-simple ,(? 'args list?)  . ,(? 'exps)) (lambda (args exps) args)) e fail!)
+    ))
+
+(define lambda-simple->exps
+  (lambda (e)
+    ((pattern-rule `(lambda-simple ,(? 'args list?)  . ,(? 'exps)) (lambda (args exps) exps)) e fail!)
+    ))
+
+(define var-pattern?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(var ,(? 'var)) (lambda (var) #t)) e fail!))
+    ))
+
+(define var->exp
+  (lambda (e)
+    ((pattern-rule `(var ,(? 'var)) (lambda (var) var)) e fail!)
+    ))
+
+(define index-of-arg
+  (lambda (arg args)
+    (letrec ((get-index (lambda (lst acc)
+                          (if (eq? arg (car lst)) acc
+                              (get-index (cdr lst) (+ 1 acc)))
+                          )))
+      (get-index args 0))
+    ))
+
+(define contain-in-previus-args?
+  (lambda (e lst)
+    (if (null? lst) #f
+        (or (eq? e (caar lst))  (contain-in-previus-args? e (cdr lst))))
+    ))
+
+(define get-var-place
+  (lambda (e lst)
+    (if (eq? e (caar lst)) (cadar lst)
+        (get-var-place e (cdr lst)))
+    ))
+
+(define replace-old-var
+  (lambda (e lst)
+    (cond ((pair? (get-var-place e lst)) `(bvar ,e ,@(get-var-place e lst)))
+          (else `(pvar ,e ,(get-var-place e lst))))
+    ))
+
+(define update-previus-args
+  (lambda (args previus-args)
+    (let* ((lst1 (map (lambda (arg) (list arg (index-of-arg arg args))) (filter (lambda (arg)(not (contain-in-previus-args? arg previus-args)))args)))
+           (lst2 (fold-right (lambda (argv acc)
+                               (let* ((arg (car argv))
+                                      (arg-place (get-var-place arg previus-args)))                    
+                                 (cond ((member arg args) (cons (list arg (index-of-arg arg args)) acc))         
+                                       ((pair? arg-place) (cons (list arg (cons (+ 1 (car arg-place)) (cdr arg-place))) acc))
+                                       (else (cons (list arg (list 0  arg-place)) acc)))
+                                 
+                                 ))'() previus-args)))
+      (append lst1 lst2))
+    ))
+
+
+(define pe->lex-pe
+  (lambda (exps) 
+    (letrec ((replace-var (lambda (e previus-args)
+                            (cond ((var-pattern? e) (if (contain-in-previus-args? (var->exp e) previus-args) (replace-old-var (var->exp e) previus-args) 
+                                                        `(fvar ,(var->exp e))))
+                                  ((lambda-simple-pattern? e)  `(lambda-simple ,(lambda-simple->args e) 
+                                                                               ,@(replace-var (lambda-simple->exps e) (update-previus-args (lambda-simple->args e) previus-args))))
+                                  ((null? e) '())
+                                  ((list? e) (cons (replace-var (car e) previus-args) (replace-var (cdr e) previus-args)))                    
+                                  (else e)
+                                  ))))
+      (replace-var exps '()))
+    ))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(define x1 '(lambda(x)
-              (begin
-                (begin (define a 4) (define b 3))
-                (begin (define c 2) (define d 1))
-                (+ a b c d))))
-
-(define p1 '(lambda-simple
-             (x)
-             (seq
-              ((def (var a) (const 4))
-               (def (var b) (const 3))
-               (def (var c) (const 2))
-               (def (var d) (const 1))
-               (applic (var +) ((var a) (var b) (var c) (var d)))))))
-(define seq (caddr p1))
-(define r1 '(lambda-simple
-             (x)
-             (applic
-              (lambda-simple
-               (a b c d)
-               (seq ((set (var a) (const 4))
-                     (set (var b) (const 3))
-                     (set (var c) (const 2))
-                     (set (var d) (const 1))
-                     (applic (var +) ((var a) (var b) (var c) (var d))))))
-              ((const #f) (const #f) (const #f) (const #f)))))
-
-(define x2 '(define my-even?
-              (lambda (e)
-                (define even? (lambda (n) (or (zero? n) (odd? (- n 1)))))
-                (define odd?
-                  (lambda (n) (and (positive? n) (even? (- n 1)))))
-                (even? e))))
-
