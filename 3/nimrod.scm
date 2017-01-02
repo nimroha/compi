@@ -1804,6 +1804,8 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; elliminate nested defines ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(define lambda-words '(lambda-simple lambda-opt lambda-var))
+
 (define ellim-internal
   (lambda (seq)
     (cond [(eq? (car seq) 'seq) (if (not (eq? (caaadr seq) 'def))
@@ -1817,22 +1819,415 @@
           [else seq])))
 
 (define eliminate-nested-defines
-  (lambda (parsed-exp)
-    (cond [(not (list? parsed-exp)) parsed-exp]
-          [(or (eq? (car parsed-exp) 'lambda-simple)
-               (eq? (car parsed-exp) 'lambda-var)) `(,(car parsed-exp)
-                                                     ,(cadr parsed-exp)
-                                                     ,(ellim-internal (caddr parsed-exp)))]
-          [(eq? (car parsed-exp) 'lambda-opt) `(,(car parsed-exp)
-                                                ,(cadr parsed-exp)
-                                                ,(caddr parsed-exp)
-                                                ,(ellim-internal (cadddr parsed-exp)))]
-          [else (map (lambda (sub-exp) (eliminate-nested-defines sub-exp)) parsed-exp)]
+  (lambda (exp)
+    (cond [(not (list? exp)) exp]
+          [(member (car exp) lambda-words) (if (eq? (car exp) 'lambda-opt)
+                                               `(,(car exp) ,(cadr exp) ,(caddr exp)
+                                                            ,(ellim-internal (cadddr exp)))
+                                               `(,(car exp) ,(cadr exp)
+                                                            ,(ellim-internal (caddr exp))))]
+          [else (map (lambda (sub-exp) (eliminate-nested-defines sub-exp)) exp)]
           )))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; remove-applic-lambda-nil ;;;;;;;;;;;;;;;;;;;;;;;
+(define empty-lambda?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(applic (lambda-simple ()  . ,(? 'exp)) ()) (lambda (exp) #t)) e fail!))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; boxing of variables ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define empty-lambda-pattern
+  (pattern-rule `(applic (lambda-simple ()  . ,(? 'exp)) ()) (lambda (exp) (car exp))))
 
 
+(define remove-applic-lambda-nil
+  (lambda (exps)
+    
+    (letrec ((empty-lambda->exp (lambda (e) (empty-lambda-pattern e fail!)))
+             (remove-lambda-empty (lambda (e)
+                                    (cond((empty-lambda? e) (remove-lambda-empty (empty-lambda->exp e)))
+                                         ((null? e) '())
+                                         ((list? e) (cons (remove-lambda-empty (car e)) (remove-lambda-empty (cdr e))))
+                                         (else e)
+                                         ))))
+      
+      (remove-lambda-empty exps)
+      )))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; pe->lex-pe ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define lambda-simple-pattern?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(lambda-simple ,(? 'args list?)  . ,(? 'exp)) (lambda (args exp) #t)) e fail!))
+    ))
+
+(define lambda-simple->args
+  (lambda (e)
+    ((pattern-rule `(lambda-simple ,(? 'args list?)  . ,(? 'exps)) (lambda (args exps) args)) e fail!)
+    ))
+
+(define lambda-simple->exps
+  (lambda (e)
+    ((pattern-rule `(lambda-simple ,(? 'args list?)  . ,(? 'exps)) (lambda (args exps) exps)) e fail!)
+    ))
+
+(define lambda-var-pattern?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(lambda-var ,(? 'args)  . ,(? 'exp)) (lambda (args exp) #t)) e fail!))
+    ))
+
+(define lambda-var->args
+  (lambda (e)
+    ((pattern-rule `(lambda-var ,(? 'args)  . ,(? 'exps)) (lambda (args exps) args)) e fail!)
+    ))
+
+(define lambda-var->exps
+  (lambda (e)
+    ((pattern-rule `(lambda-var ,(? 'args)  . ,(? 'exps)) (lambda (args exps) exps)) e fail!)
+    ))
+
+(define lambda-opt-pattern?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(lambda-opt ,(? 'args list?) ,(? 'rest) . ,(? 'exp)) (lambda (args rest exp) #t)) e fail!))
+    ))
+
+(define lambda-opt->args
+  (lambda (e)
+    ((pattern-rule `(lambda-opt ,(? 'args list?) ,(? 'rest) . ,(? 'exp)) (lambda (args rest exps)  args )) e fail!)
+    ))
+
+(define lambda-opt->rest
+  (lambda (e)
+    ((pattern-rule `(lambda-opt ,(? 'args list?) ,(? 'rest) . ,(? 'exp)) (lambda (args rest exps)  rest )) e fail!)
+    ))
+
+(define lambda-opt->args-and-rest
+  (lambda (e)
+    ((pattern-rule `(lambda-opt ,(? 'args list?) ,(? 'rest) . ,(? 'exp)) (lambda (args rest exps)  (append args (list rest)))) e fail!)
+    ))
+
+(define lambda-opt->exps
+  (lambda (e)
+    ((pattern-rule `(lambda-opt ,(? 'args list?) ,(? 'rest) . ,(? 'exp)) (lambda (args rest exps) exps)) e fail!)
+    ))
+(define var-pattern?
+  (lambda (e)
+    (eq? #t ((pattern-rule `(var ,(? 'var)) (lambda (var) #t)) e fail!))
+    ))
+
+(define var->exp
+  (lambda (e)
+    ((pattern-rule `(var ,(? 'var)) (lambda (var) var)) e fail!)
+    ))
+
+(define index-of-arg
+  (lambda (arg args)
+    (letrec ((get-index (lambda (lst acc)
+                          (if (eq? arg (car lst)) acc
+                              (get-index (cdr lst) (+ 1 acc)))
+                          )))
+      (get-index args 0))
+    ))
+
+(define contain-in-previus-args?
+  (lambda (e lst)
+    (if (null? lst) #f
+        (or (eq? e (caar lst))  (contain-in-previus-args? e (cdr lst))))
+    ))
+
+(define get-var-place
+  (lambda (e lst)
+    (if (eq? e (caar lst)) (cadar lst)
+        (get-var-place e (cdr lst)))
+    ))
+
+(define replace-old-var
+  (lambda (e lst)
+    (cond ((pair? (get-var-place e lst)) `(bvar ,e ,@(get-var-place e lst)))
+          (else `(pvar ,e ,(get-var-place e lst))))
+    ))
+
+(define update-previus-args
+  (lambda (args previus-args)
+    (let* ((lst1 (map (lambda (arg) (list arg (index-of-arg arg args))) (filter (lambda (arg)(not (contain-in-previus-args? arg previus-args)))args)))
+           (lst2 (fold-right (lambda (argv acc)
+                               (let* ((arg (car argv))
+                                      (arg-place (get-var-place arg previus-args)))                    
+                                 (cond ((member arg args) (cons (list arg (index-of-arg arg args)) acc))         
+                                       ((pair? arg-place) (cons (list arg (cons (+ 1 (car arg-place)) (cdr arg-place))) acc))
+                                       (else (cons (list arg (list 0  arg-place)) acc)))
+                                 
+                                 ))'() previus-args)))
+      (append lst1 lst2))
+    ))
+
+
+(define pe->lex-pe
+  (lambda (exps) 
+    (letrec ((replace-var (lambda (e previus-args)
+                            (cond ((var-pattern? e) (if (contain-in-previus-args? (var->exp e) previus-args) (replace-old-var (var->exp e) previus-args) 
+                                                        `(fvar ,(var->exp e))))
+                                  ((lambda-simple-pattern? e)  `(lambda-simple ,(lambda-simple->args e) 
+                                                                               ,@(replace-var (lambda-simple->exps e) (update-previus-args (lambda-simple->args e) previus-args))))
+                                  ((lambda-var-pattern? e)  `(lambda-var ,(lambda-var->args e) 
+                                                                         ,@(replace-var (lambda-var->exps e) (update-previus-args (list(lambda-var->args e)) previus-args))))
+                                  ((lambda-opt-pattern? e)  `(lambda-opt ,(lambda-opt->args e) ,(lambda-opt->rest e) 
+                                                                         ,@(replace-var (lambda-opt->exps e) (update-previus-args (lambda-opt->args-and-rest e) previus-args))))
+                                  ((null? e) '())
+                                  ((list? e) (cons (replace-var (car e) previus-args) (replace-var (cdr e) previus-args)))                    
+                                  (else e)
+                                  ))))
+      (replace-var exps '()))
+    ))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; box-set ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define member?
+  (lambda (e lst)
+    (if (null? lst) #f
+        (or (eq? e (car lst)) (member? e (cdr lst))))
+    ))
+
+(define var->box-get-var
+  (lambda (e)
+    ((pattern-rule `(var ,(? 'var)) (lambda (var) `(box-get (var ,var)))) e fail!)
+    ))
+
+(define set-var?
+  (lambda (e)
+    ( (pattern-rule `(set (var ,(? 'var)) ,(? 'val)) (lambda (var val) #t)) e (lambda() #f))
+    ))
+
+(define set-var->exp
+  (lambda (e)
+    ((pattern-rule `(set (var ,(? 'var))  ,(? 'val)) (lambda (var val) var)) e fail!)
+    ))
+
+(define set-var->val
+  (lambda (e)
+    ((pattern-rule `(set (var ,(? 'var))  ,(? 'val)) (lambda (var val) val)) e fail!)
+    ))
+
+(define set-pvar?
+  (lambda (e)
+    ( (pattern-rule `(set (pvar ,(? 'var) ,(? 'minor)) ,(? 'val)) (lambda (var minor val) #t)) e (lambda() #f))
+    ))
+
+(define set-pvar->exp
+  (lambda (e)
+    ((pattern-rule `(set (pvar ,(? 'var)  ,(? 'minor))  ,(? 'val)) (lambda (var minor val) var)) e fail!)
+    ))
+
+(define set-pvar->val
+  (lambda (e)
+    ((pattern-rule `(set (pvar ,(? 'var)  ,(? 'minor))  ,(? 'val)) (lambda (var minor val) val)) e fail!)
+    ))
+
+(define set-bvar?
+  (lambda (e)
+    ( (pattern-rule `(set (bvar ,(? 'var) ,(? 'major) ,(? 'minor)) ,(? 'val)) (lambda (var major minor val) #t)) e (lambda() #f))
+    ))
+
+(define set-bvar->exp
+  (lambda (e)
+    ((pattern-rule `(set (bvar ,(? 'var) ,(? 'major) ,(? 'minor))  ,(? 'val)) (lambda (var major minor val) var)) e fail!)
+    ))
+
+(define set-bvar->val
+  (lambda (e)
+    ((pattern-rule `(set (bvar ,(? 'var) ,(? 'major) ,(? 'minor))  ,(? 'val)) (lambda (var major minor val) val)) e fail!)
+    ))
+
+(define set-fvar?
+  (lambda (e)
+    ( (pattern-rule `(set (fvar ,(? 'var)) ,(? 'val)) (lambda (var val) #t)) e (lambda() #f))
+    ))
+
+(define set-fvar->exp
+  (lambda (e)
+    ((pattern-rule `(set (fvar ,(? 'var))  ,(? 'val)) (lambda (var val) var)) e fail!)
+    ))
+
+(define set-fvar->val
+  (lambda (e)
+    ((pattern-rule `(set (fvar ,(? 'var))  ,(? 'val)) (lambda (var val) val)) e fail!)
+
+    ))
+
+(define bvar-pattern?
+  (lambda (e)
+    ((pattern-rule `(bvar ,(? 'var) ,(? 'major) ,(? 'minor)) (lambda (var major minor) #t)) e (lambda() #f))
+    ))
+
+(define bvar->exp
+  (lambda (e)
+    ((pattern-rule `(bvar ,(? 'var) ,(? 'major) ,(? 'minor)) (lambda (var major minor) var)) e (lambda() #f))
+    ))
+
+(define pvar-pattern?
+  (lambda (e)
+    ((pattern-rule `(pvar ,(? 'var)  ,(? 'minor)) (lambda (var  minor) #t)) e (lambda() #f))
+    ))
+
+
+(define pvar->exp
+  (lambda (e)
+    ((pattern-rule `(pvar ,(? 'var)  ,(? 'minor)) (lambda (var  minor) var)) e (lambda() #f))
+
+    ))
+
+
+(define set->box-set
+  (lambda (e)
+    ((pattern-rule `(set (var ,(? 'var))  ,(? 'val)) (lambda (var val) `(box-set (var ,var) ,val))) e (lambda() #f))
+    ))
+
+(define filter-list
+  (lambda (lst lst-to-filter)
+    (filter (lambda (e)(not (member? e lst))) lst-to-filter)
+    ))
+
+(define set?
+  (lambda (el exp)
+    (cond ((and (set-var? exp)(eq? (set-var->exp exp) el)) #t)
+          ((lambda-simple-pattern? exp) (set? el (lambda-simple->exps exp)))
+          ((lambda-var-pattern? exp) (set? el (lambda-var->exps exp)))
+          ((lambda-opt-pattern? exp) (set? el (lambda-opt->exps exp)))
+          ((null? exp) #f)
+          ((list? exp) (or (set? el (car exp)) (set? el (cdr exp))))                    
+          (else #f))
+    ))
+
+
+(define bound?
+  (lambda (el exp)
+    (cond ((set-bvar? exp)(bound? el (set-bvar->val exp)))
+          ((set-pvar? exp)(bound? el (set-pvar->val exp)))
+          ((set-fvar? exp)(bound? el (set-fvar->val exp)))
+          ((and (bvar-pattern? exp)(eq? (bvar->exp exp) el) #t))
+          ((lambda-simple-pattern? exp)(if (member? el (lambda-simple->args exp)) #f (bound? el (lambda-simple->exps exp))))
+          ((lambda-var-pattern? exp)(if (member? el (list (lambda-var->args exp))) #f (bound? el (lambda-var->exps exp))))
+          ((lambda-opt-pattern? exp)(if (member? el (lambda-opt->args-and-rest exp)) #f (bound? el (lambda-opt->exps exp))))
+          ((null? exp) #f)
+          ((list? exp) (or (bound? el (car exp)) (bound? el (cdr exp))))                    
+          (else #f))
+    ))
+
+(define get?
+  (lambda (el exp)
+    (cond  ((set-bvar? exp)(get? el (set-bvar->val exp)))
+           ((set-pvar? exp)(get? el (set-pvar->val exp)))
+           ((set-fvar? exp)(get? el (set-fvar->val exp)))
+           ((and (bvar-pattern? exp)(eq? (bvar->exp exp) el) #t))
+           ((and (pvar-pattern? exp)(eq? (pvar->exp exp) el) #t))
+           ((lambda-simple-pattern? exp)(if (member? el (lambda-simple->args exp)) #f (get? el (lambda-simple->exps exp))))
+           ((lambda-var-pattern? exp)(if (member? el (list (lambda-var->args exp))) #f (get? el (lambda-var->exps exp))))
+           ((lambda-opt-pattern? exp)(if (member? el (lambda-opt->args-and-rest exp)) #f (get? el (lambda-opt->exps exp))))
+           ((null? exp) #f)
+           ((list? exp) (or (get? el (car exp)) (get? el (cdr exp))))                    
+           (else #f))
+    ))
+
+(define set-arg?
+  (lambda (el exps)
+    (let ((lex-pe-exp (pe->lex-pe exps)))
+      (cond ((lambda-simple-pattern? exps)
+             (and (set? el (lambda-simple->exps  exps)) (bound? el (lambda-simple->exps lex-pe-exp)) (get? el (lambda-simple->exps lex-pe-exp))))
+            ((lambda-var-pattern? exps)
+             (and (set? el (lambda-var->exps  exps)) (bound? el (lambda-var->exps lex-pe-exp)) (get? el (lambda-var->exps lex-pe-exp))))
+            ((lambda-opt-pattern? exps)
+             (and (set? el (lambda-opt->exps  exps)) (bound? el (lambda-opt->exps lex-pe-exp)) (get? el (lambda-opt->exps lex-pe-exp))))
+            ))))
+
+(define set-args
+  (lambda (args exps)
+    (let ((lex-pe-exp (pe->lex-pe exps)))
+      (cond ((lambda-simple-pattern? exps)
+             (filter (lambda (el)(and (set? el (lambda-simple->exps  exps)) (bound? el (lambda-simple->exps lex-pe-exp)) (get? el (lambda-simple->exps lex-pe-exp)))) args))
+            ((lambda-var-pattern? exps)
+             (filter (lambda (el)(and (set? el (lambda-var->exps  exps)) (bound? el (lambda-var->exps lex-pe-exp)) (get? el (lambda-var->exps lex-pe-exp)))) args))
+            ((lambda-opt-pattern? exps)
+             (filter (lambda (el)(and (set? el (lambda-opt->exps  exps)) (bound? el (lambda-opt->exps lex-pe-exp)) (get? el (lambda-opt->exps lex-pe-exp)))) args))
+            ))))
+
+
+
+
+
+(define update-set-list
+  (lambda (args old-set-list exp)
+    (let((new-set-list (filter-list args old-set-list)))
+      (append new-set-list (filter (lambda (e)(set-arg? e exp)) args)))
+
+
+    ))
+
+(define make-seq-list
+  (lambda (lst)
+    (fold-left (lambda (e acc) (append acc `((set (var ,e) (box (var ,e)))))) '() lst)
+    ))
+
+(define box-set
+  (lambda (exps) 
+    (letrec ((replace-var (lambda (e set-list)
+                            (cond ((set-var? e) (if (member? (set-var->exp e) set-list)
+                                                    ((pattern-rule `(set (var ,(? 'var))  ,(? 'val)) (lambda (var val) `(box-set (var ,var) ,(replace-var val set-list)))) e (lambda() #f))  e))
+                                  ((var-pattern? e) (if (member? (var->exp e) set-list) (var->box-get-var e) e))
+                                  ((lambda-simple-pattern? e) (if (null? (set-args (lambda-simple->args e) e)) `(lambda-simple ,(lambda-simple->args e) 
+                                                                                                                               ,@(replace-var (lambda-simple->exps e) (update-set-list (lambda-simple->args e) set-list e)))
+                                                                  `(lambda-simple ,(lambda-simple->args e) (seq (,@(make-seq-list (set-args (lambda-simple->args e) e))
+                                                                                                                 ,@(replace-var (lambda-simple->exps e) (update-set-list (lambda-simple->args e) set-list e)))))))
+                                  ((lambda-var-pattern? e) (if (null? (set-args (list (lambda-var->args e)) e)) `(lambda-var ,(lambda-var->args e) 
+                                                                                                                             ,@(replace-var (lambda-var->exps e) (update-set-list (list (lambda-var->args e)) set-list e)))
+                                                               `(lambda-simple ,(lambda-var->args e) (seq (,@(make-seq-list (set-args (list (lambda-var->args e)) e))
+                                                                                                           ,@(replace-var (lambda-var->exps e) (update-set-list (list (lambda-var->args e)) set-list e)))))))
+                                  ((lambda-opt-pattern? e) (if (null? (set-args (lambda-opt->args-and-rest e) e)) `(lambda-opt ,(lambda-opt->args e) ,(lambda-opt->rest e) 
+                                                                                                                               ,@(replace-var (lambda-opt->exps e) (update-set-list (lambda-opt->args-and-rest e) set-list e)))
+                                                                  `(lambda-opt ,(lambda-opt->args e) ,(lambda-opt->rest e) (seq (,@(make-seq-list (set-args (lambda-opt->args-and-rest e) e))
+                                                                                                                 ,@(replace-var (lambda-opt->exps e) (update-set-list (lambda-opt->args-and-rest e) set-list e)))))))
+                                  ((null? e) '())
+                                  ((list? e) (cons (replace-var (car e) set-list) (replace-var (cdr e) set-list)))                    
+                                  (else e)
+                                  ))))
+
+
+      (replace-var exps '()))
+    ))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; annotate tail calls ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define leaf-words '(const var bvar fvar pvar))
+
+(define minus1
+  (lambda (n)
+    (- n 1)))
+
+(define tc-map
+  (lambda (exp bools)
+    (map (lambda (sub-exp t?) (tc-internal sub-exp t?)) exp bools)))
+
+(define tc-internal
+  (lambda (exp tc?)
+    (let ((tag (car exp))
+          (body (cdr exp)))
+      (cond [(member tag leaf-words) exp]
+            [(eq? tag 'applic) (let ((bools (make-list (length body) #f)))
+                                 (if tc?
+                                     `(tc-applic ,(tc-map body bools))
+                                     `(applic ,(tc-map body bools))))]
+            [(eq? tag  'or) (let ((bools (append (make-list (minus1 (length body)) #f) `(,tc?))))
+                              (cons tag (tc-map body bools)))]
+            [(eq? tag 'if3) (let ((bools `(#f ,tc? ,tc?)))
+                              (cons tag (tc-map body bools)))]
+            [(eq? tag 'def) (let ((bools '(#f #f)))
+                              (cons tag (tc-map body bools)))]
+            [(eq? tag 'seq) (let ((bools (append (make-list (minus1 (length body)) #f) `(,tc?))))
+                              (cons tag (tc-map body bools)))]
+            [(member tag lambda-words) (if (eq? tag 'lambda-opt)
+                                           `(,tag ,(car body) ,(cadr body) ,(tc-internal (caddr body) #t))
+                                           `(,tag ,(car body) ,(tc-internal (cadr body) #t)))]
+            [(list? tag) (if (null? body)
+                             `(,(tc-internal tag tc?))
+                             (cons (tc-internal tag tc?) (tc-internal body tc?)))]
+            [else `(ERROR in tc-internal. case not covered: ,tag ,exp)] ; reached if we missed something
+    ))))
+
+(define annotate-tc
+  (lambda (exp)
+    (tc-internal exp #f)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1869,4 +2264,10 @@
                 (define odd?
                   (lambda (n) (and (positive? n) (even? (- n 1)))))
                 (even? e))))
+
+(define x3 '(define fact (lambda (n) (if (zero? n) 1 (* n (fact (- n 1)))))))
+
+(define x4 '(x (lambda (x) (x (lambda () (x (lambda () (x x))))))))
+
+(define x5 '(lambda (f) ((lambda (x) (f (lambda s (apply (x x) s)))) (lambda (x) (f (lambda s (apply (x x) s)))))))
 
